@@ -8,7 +8,7 @@
 #' 
 #' 1) What are the names of the columns in this dataset?
   
-dat = read.csv('http://dmcglinn.github.io/quant_methods/data/tgpp.csv')
+dat <- read.csv('http://dmcglinn.github.io/quant_methods/data/tgpp.csv')
 names(dat)
 
 
