@@ -1,0 +1,491 @@
+---
+title: "Solutions to the Univariate Models assignment"
+output: pdf_document
+---
+## Univariate Assignment
+
+```{r, echo=FALSE}
+# setup the R enviornment for kniting markdown doc properly
+library(knitr)
+opts_knit$set(root.dir='../', tidy = TRUE)
+```
+
+Read in tree data, metadata can be found [here](../data/tree_metadata.txt).
+
+```{r read in pkgs and data}
+library(car)
+library(MASS)
+library(GGally)
+source('https://raw.githubusercontent.com/dmcglinn/quant_methods/gh-pages/scripts/utility_functions.R')
+
+# read in data
+maple <- read.csv('./data/maple.csv', stringsAsFactors = TRUE)
+fir <- read.csv('./data/fir.csv', stringsAsFactors = TRUE)
+```
+
+1. Carry out an exploratory analysis using the tree dataset. 
+Develop and compare models for species cover for a habitat generalist
+[_*Acer rubrum*_ (Red maple)](http://www.durhamtownship.com/blog-archives/pix/November1407.jpg) 
+and a habitat specialist [_*Abies fraseri*_ (Frasier fir)](https://upload.wikimedia.org/wikipedia/commons/d/d0/Abies_fraseri_Mitchell.jpg). 
+Because this dataset includes both continuous and discrete explanatory
+variables use the function `Anova` in the packages `car`. After loading `car`
+we can call the function like so:
+
+    ```{r, eval=FALSE}
+    Anova(my_mod, type=3)
+    ```
+
+    This will estimate partial effect sizes, variance explained, and p-values for 
+    each explanatory variable included in the model. 
+
+    Compare the p-values you observe using the function `Anova` to those generated
+    using `summary`. 
+
+    For each species address the following additional questions:
+
+        * how well does the exploratory model appear to explain cover?
+        * which explanatory variables are the most important?
+        * do model diagnostics indicate any problems with violations of
+          OLS assumptions?
+        * are you able to explain variance in one species better than another?
+
+
+```{r pairs, warning=FALSE}
+# prior to model fitting I will visually examine correlations with cover
+pairs(maple, lower.panel = panel.cor, upper.panel = panel.smooth)
+pairs(fir, lower.panel = panel.cor, upper.panel = panel.smooth)
+``` 
+
+The `GGally` package also has a slick ggplot option for pairs plots
+```{r ggpairs}
+ggpairs(maple)
+ggpairs(fir)
+```
+
+These plots already tell us the take home message in many ways which is that red
+maple cover is not well explained by the measured enviornmental variables with
+the exception of elevation. Fraser fir (*Abies fraseri*) may correlate better
+with the environmental variables but it is difficult to tell because it has a
+cover of zero in so many plots.
+
+Now we will carry out OLS model fitting. As this is an explanatory modeling
+we will include all of the variables in the models. We do this for several 
+reasons: 
+
+1. this is the best way to fairly compete the variables against one another
+2. a partial correlation between the response and an explanatory variable may
+be stronger than its raw correlation due to interference from other variables.
+
+```{r ols models}
+# build OLS models using "." shorthand which is short for all variables in data
+maple_lm <- lm(cover ~ . , data=maple)
+fir_lm <- lm(cover ~ . , data=fir)
+```
+
+Let's first examine the overall model fit by examining the predicted-observed (PO) plot: 
+
+```{r lm observed vs predicted plots}
+par(mfrow=c(1, 2))
+plot(predict(maple_lm), maple$cover, xlab='Predicted cover', ylab='Observed cover')
+abline(a=0, b=1)
+plot(predict(fir_lm), fir$cover, xlab='Predicted cover', ylab='Observed cover')
+abline(a=0, b=1)
+par(mfrow=c(1, 1))
+```
+
+There are some pretty large and systematic deviations from the one-to-one line
+which suggests that our model is performing poorly for both species. Additionally
+it is obvious that observed cover values are integers while the predicted values
+are continuous. Negative cover is predicted for fir but this doesn't
+make any sense. We'll return to this idea later when we fit the Poisson GLM
+model which only predicts positive integer values.
+
+
+```{r lm diagnostics}
+# before diving into statistics we should check model diagonostics
+par(mfrow=c(2,2))
+plot(maple_lm)
+plot(fir_lm)
+par(mfrow=c(1,1))
+```
+
+Those diagnostic plots are waving some red flags. In particular, the "Residuals 
+vs Fitted" and "Scale-Location" plots indicate that their are some systematic 
+deviations of the residuals. You should not see regular geometric patterns in 
+residuals so that is a bit troubling. These systematic errors are occurring
+because the response `cover` is a discrete variable and the Gaussian error term
+in our OLS assumes a continuous response. So there is a mismatch between our
+error distribution and the variable we are modeling.
+
+
+Partial regression plots provide another useful visual representation of the
+multiple regression model:
+```{r partial regression}
+par(mfrow=c(2,3))
+termplot(maple_lm, se = TRUE, partial.resid = TRUE)
+par(mfrow=c(2,3))
+termplot(fir_lm, se = TRUE, partial.resid = TRUE)
+```
+
+Above the two sets of plots are displaying the partial residuals, best fit line,
+and the 95% confidence interval for each term in the maple and fir multiple
+regression models respectively. You can think of these relationships as the
+correlation between the variable and the response after the other variables have
+been statistically controlled for (i.e., the partial effect).
+
+From these plots we can see that elevation has the strongest effect on both
+trees where it is negative for maple and positive for fir. The tci variable
+appears to be the next most important variable where maple has a negative
+relationsihp and fir has a positive relationship. The other variables appear to
+be a wash for the most part.
+
+The function `termplot` can be used to examine partial effects for `glm` models
+as well. The `car` package also provides a nice function for examining partial
+residuals called `crPlots` (see
+[here](https://www.statology.org/partial-residual-plot-in-r/) for examples).
+
+Now let's examine the output from the functions `summary` and `Anova` to examine
+    1. partial variable importance (t-value effect size and significance)
+    2. overall model performance (adjusted r-squared and significance)
+
+```{r maple lm tables}
+summary(maple_lm)
+Anova(maple_lm, type=3)
+```
+
+Overall the model for maple explained `r round(summary(maple_lm)$adj.r.squared, 2) * 100`% of the variance in cover based upon the computed adjusted $R^2$. 
+This actually would not necessarily be considered a terrible $R^2$ value if it were not for the systematic deviations we already observed in the fitted and residual
+values of the model which indicate a fundamentally flawed model. 
+
+The strongest correlations for this species are negative with respect to `elev`, `tci` and `beers` as evidenced by their negative t-values which were significantly different than zero. 
+This indicates that this species prefers lower elevations that are dryer and warmer.
+
+```{r fir lm tables}
+summary(fir_lm)
+Anova(fir_lm, type=3)
+```
+
+For fir the results are a bit different. This species is slightly better
+explained by the explanatory variables (adjusted $R^2$ = 
+`r round(summary(fir_lm)$adj.r.squared, 2)`). 
+
+The ANOVA table indicates that this species is primarily driven by `elev` with a
+secondary role for `disturbance`. Note the F-statistics for those variables are
+much larger. The `summary` output which provides the coefficient estimates
+suggests that this species prefers high elevations (positive regression
+coefficient) and VIRGIN forests (the most positive \(\beta\) of the disturbance categories)
+- remember these \(\beta\)'s are relative to the intercept which in this case is the disturbance category `r levels(fir$disturb)[1]`).
+
+We were able to model the habitat specialist, fir, about as well as
+the more generalist species maple, but we have some serious concerns and
+doubts about our inferences because the model diagnostics and common sense
+suggest that a Gaussian error for this response variables is inappropriate.
+
+
+2. You may have noticed that the variable cover is defined as positive integers
+between 1 and 10. and is therefore better treated as a discrete rather than
+continuous variable. Re-examine your solutions to the question above but from
+the perspective of a General Linear Model (GLM) with a Poisson error term 
+(rather than a Gaussian one as in OLS). The Poisson distribution generates
+integers 0 to positive infinity so this may provide a good first approximation. 
+Your new model calls will look as follows:
+
+    ```{r, eval=FALSE}
+    maple_poi <- glm(cover ~ tci + elev + ... , data= my_data, 
+                   family='poisson')
+    ```
+
+    For assessing the degree of variation explained you can use a 
+    pseudo-R-squared statistic (note this is just one of many possible)
+
+    ```{r}
+    pseudo_r2 <- function(glm_mod) {
+        1 -  glm_mod$deviance / glm_mod$null.deviance
+    }
+    ```
+
+    Compare your qualative assessment of which variables were most important in each model. 
+    Does it appear that changing the error distribution changed the
+    results much? In what ways? 
+
+```{r poisson regression}
+maple_poi <- glm(cover ~ . , data = maple, family = 'poisson')
+fir_poi <- glm(cover ~ . , data = fir, family = 'poisson')
+```
+
+Let's examine the predicted-observed plots first to see if they systematic error
+is better handled.
+
+```{r poisson PO plot}
+par(mfrow=c(1, 2))
+plot(predict(maple_poi, type='response'), maple$cover,
+     xlab='Predicted cover', ylab='Observed cover')
+abline(a=0, b=1)
+plot(predict(fir_poi, type='response'), fir$cover,
+     xlab='Predicted cover', ylab='Observed cover')
+abline(a=0, b=1)
+par(mfrow=c(1, 1))
+```
+
+These PO plots already look much more encouraging.
+There is still quite a bit of error but it is less systematic and 
+their are no predicted negative cover values. 
+Let's look at the model diagnostics:
+
+```{r poisson model diagnostics}
+par(mfrow=c(2,2))
+plot(maple_poi)
+plot(fir_poi)
+par(mfrow=c(1,1))
+```
+
+These model diagnostics look better but still not great. We can still observe
+some systematic patterns of error in the residuals plots. Also the Fraser fir
+residuals are still decidedly non-Normal.
+This seems to be due in part to the large number of 
+samples with zero cover of *Abies fraserii*. 
+
+One important thing to note is that the predicted and residual values in the
+above plots are on the transformed log scale. It can be more intuitive and
+informative to plot them on the response scale as follows. 
+
+```{r}
+par(mfrow=c(1,2))
+plot(predict(maple_poi, type='response'),
+     residuals(maple_poi, type='response'), 
+     xlab='Fitted values', ylab='Residuals',
+     main='maple')
+plot(predict(fir_poi, type='response'),
+     residuals(fir_poi, type='response'),
+     xlab='Fitted values', ylab='Residuals',
+     main='fir')
+par(mfrow=c(1,1))
+```
+
+Before we examine differences in the model outputs, let's examine if using the
+Poisson error term improved model fit.
+
+```{r}
+summary(maple_lm)$r.squared
+pseudo_r2(maple_poi)
+summary(fir_lm)$r.squared
+pseudo_r2(fir_poi)
+```
+
+For red maple the fit is worse but for Fraser fir we observe a big improvement
+in fit. This is in large part due to the fact that the Poisson distribution is
+truncated at zero and given that for Fraser fir there are a lot of sites with
+zero cover where the Gaussian model was doing a very poor job.
+
+The PO plots For both Poisson models suggest that the models tend to under
+predict the occurrence of the zero category. This is most pronounced for Fraser
+fir. So even though we've explicitly recognized the positive discrete nature of
+our response variable it is still inflated with zeros relative to a Poisson
+distribution.
+
+Given that the Poisson regression actually performed worse for the Red maple
+than the OLS regression. I'll not interpret that model further.
+
+```{r}
+summary(fir_poi)
+Anova(fir_poi, type=3)
+```
+
+The take home messages we arrived at with the OLS modeling have not changed
+greatly for Fraser fir. More variables are statistically significant but the
+real story remains about the strong effect of elevation and disturbance.
+
+At this point we may still not be very satisfied with our modeling though given
+the excess of zeros we observed above the Fraser firs. One option would be to
+try to use a negative binomial error term rather than Poisson which provides for
+greater aggregation of zeros due to the inclusion of an additional clumping
+parameter.
+
+```{r fir negative binomial}
+library(MASS)
+
+fir_nb <- glm.nb(cover ~ . , data=fir,
+                  control=glm.control(maxit=100))
+AIC(fir_poi)
+AIC(fir_nb)
+```
+
+That resulted in a modest decrease in the AIC. One last model to examine is a
+zero inflated Poisson model in which combines two models: 
+
+* a logistic regression for whether or not cover is zero or not, and 
+* a Poisson regression for variation in the size of cover. 
+
+```{r fir zip}
+library(pscl)
+
+# fit a model in which all the variables are included
+# in the portion of the model with positive values, and 
+# only include elevation in the model for the zeros. 
+
+fir_zip <- zeroinfl(cover ~ . | elev, data=fir)
+
+AIC(fir_poi)
+AIC(fir_nb)
+AIC(fir_zip)
+
+# PO plot
+plot(predict(fir_zip), fir$cover)
+abline(a=0, b=1)
+
+# diagonstic plot
+plot(predict(fir_zip), residuals(fir_zip))
+```
+
+This model resulted in a substantial increase in the model adequacy as judged by
+the much lower AIC. The model diagnostic plot looks more reasonable and when we
+examine the predicted to observed plot we see that we are doing a better job
+predicting all the zeros in the dataset.
+
+```{r}
+Anova(fir_zip, type=3)
+```
+
+The above output from `Anova` isn't so helpful. We see that `disturb` is marginally important but in this case `summary` provides more useful information. 
+
+```{r}
+summary(fir_zip)
+```
+
+Above we see the coefficient estimates for the Poisson portion of the model
+first and then below the coefficients for the logistic portion of the model.
+Elevation had a very important role on the performance of the logistic
+regression which isn't a big surprise based on the very first graph we made
+using `pairs`. Elevation likely also was relevant for the Poisson portion based
+on what we've learned with the other models but it is difficult to be sure
+because the estimate of standard error, the z-value, and the p-value are missing
+for this variable. This is because of the warning that was generated with
+summarizing the model output. I'm not exactly sure what happened but when you
+look at the variance-covariance matrix the diagonal element for elevation is
+very small and the sqrt of a very small number is NaN. This must be needed for
+downstream estimates of standard error and the like. To round out our impression
+of our ability to model the influence of elevation on *Abies frasier* cover we
+can plot our predictions against the data. To do so we'll make it a bit easier
+by only considering a zero-inflated Poisson model that only includes elevation.
+
+```{r}
+fir_elev_gau <- glm(cover ~ elev, data=fir, family='gaussian')
+fir_elev_poi <- glm(cover ~ elev, data=fir, family='poisson')
+fir_elev_zip <- zeroinfl(cover ~ elev | elev, data=fir)
+
+fir_newdata <- data.frame(elev = seq(min(fir$elev), max(fir$elev),
+                                 length.out=100))
+plot(cover ~ elev, data=fir, xlab='Elevation', 
+     ylab='cover', main='fir',
+     ylim=c(-1, 10))
+lines(lowess(fir$elev, fir$cover), col='red', lwd=2)
+lines(fir_newdata$elev,
+      predict(fir_elev_gau, newdata=fir_newdata,
+              type='response'), col='dodgerblue', lwd=2)
+lines(fir_newdata$elev,
+      predict(fir_elev_poi, newdata=fir_newdata,
+              type='response'),  col='purple3', lwd=2)
+lines(fir_newdata$elev, 
+      predict(fir_elev_zip, newdata=fir_newdata),
+      col='blue', lwd=2)
+legend('topleft', c('lowess', 'Gaussian', 'Poisson', 'zero-inflated Poisson'), 
+       col=c('red', 'dodgerblue', 'purple3', 'blue', 'green'),
+       lwd=2, bty='n')
+```
+
+Let's examine if the zero-inflated Poisson improves our maple model as well.
+
+```{r}
+maple_zip <- zeroinfl(cover ~ . | elev, data=maple)
+
+AIC(maple_poi)
+AIC(maple_zip)
+
+summary(maple_zip)
+
+plot(predict(maple_zip), maple$cover)
+abline(a=0, b=1)
+plot(predict(maple_zip), residuals(maple_lm))
+
+
+
+maple_elev_gau <- glm(cover ~ elev, data=maple, family='gaussian')
+maple_elev_poi <- glm(cover ~ elev, data=maple, family='poisson')
+maple_elev_zip <- zeroinfl(cover ~ elev | elev, data=maple)
+
+maple_newdata <- data.frame(elev = seq(min(maple$elev), max(maple$elev),
+                                 length.out=100))
+
+plot(cover ~ elev, data=maple, xlab='Elevation', 
+     ylab='cover', main='maple',
+     ylim=c(-1, 10), xlim=c(250, 2250))
+lines(lowess(maple$elev, maple$cover), col='red', lwd=2)
+lines(maple_newdata$elev,
+      predict(maple_elev_gau, newdata=maple_newdata,
+              type='response'), col='dodgerblue', lwd=2)
+lines(maple_newdata$elev,
+      predict(maple_elev_poi, newdata=maple_newdata,
+              type='response'),  col='purple3', lwd=2)
+lines(maple_newdata$elev, 
+      predict(maple_elev_zip, newdata=maple_newdata),
+      col='blue', lwd=2)
+legend('topright', c('lowess', 'Gaussian', 'Poisson', 'ZIP'), 
+       col=c('red', 'dodgerblue', 'purple3', 'blue', 'green'),
+       lwd=2, bty='n')
+```
+
+The payoff is not as great for adopting a ZIP model for maple, but the
+AIC is still substantially lower and the diagnostic residual plot is much
+better behaved.
+
+This last plot for maple suggests a uni-modal response of 
+this species with elevation which could either be best captured
+using a weighted averaging approach of including a quadratic elevation term into the model (i.e., `elev^2`). 
+
+3. Provide a plain English summary (i.e., no statistics) of what you have
+found and what conclusions we can take away from your analysis?
+
+The take home messages from this analysis are that both species are responding 
+to the environment although fir which is more of a habitat 
+specialist shows stronger correlations with the available enviornmental 
+variables. Elevation was the most important variable in all the models we 
+examined and ecologically this is not a big surprise either given its combined
+influence on moisture and temperature. From a modeling perspective we also
+gained some insight when working with discrete data. If there are a lot of zeros
+we observed that developing a separate model for the zeros was extremely
+beneficial for constructing more accurate and reasonable model predictions.
+Interestingly though the take home messages of which variables were important
+did not change greatly from our initial inference from the OLS models. This
+indicates OLS is fairly robust to substantial violations of its assumptions.
+Most importantly it is key to recognize that  lot of the insight we gained from
+the model analysis was visually pretty obvious from our initial observation of
+the data patterns. This is a good reminder to always plot the data!
+
+4. (optional) Examine the behavior of the function `step()` using the 
+exploratory models developed above. This is a very simple and not very robust
+machine learning stepwise algorithm that uses AIC to select a best model. By
+default it does a backward selection routine.
+
+```{r optional stepwise models}
+maple_step <- step(maple_lm)
+# streamdist is dropped
+summary(maple_step)
+fir_step <- step(fir_lm)
+summary(fir_step)
+# beers is dropped
+```
+In the code above, I have provided the methods for using a backward stepwise
+algorithim to reduce the model complexity when the input model is an OLS model
+fit with `lm`. You can see that the function `step` outputs information about
+increased model fit as the algorithim removes variables (i.e., works backward)
+For both the `maple_lm` and `fir_lm` objects the algo only removes a single
+variable before setting on what is consider the most parsimonious model (i.e.,
+the lowest AIC). In this particular case we really do not learn anything new as
+this effectively results in just dropping the non-significant variables form the
+models which we already had a good clue were unimportant. The stepwise approach
+can also be used with the models fit with other model specifications such as
+`glm`, `glm.nb` or `zeroinfl`. The `step` function can also be setup to be 
+a foward selection algorithim using its `scope` and `direction` arguments. As noted in the univariate lesson, automated variable selection approaches that 
+compare many different models should be treated as exploratory and not for
+strict hypothesis testing. 
+
