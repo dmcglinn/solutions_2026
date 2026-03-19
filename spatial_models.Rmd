@@ -1,0 +1,246 @@
+---
+title: "Spatial models assignment"
+author: "Dan McGlinn"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, echo=FALSE}
+# setutp the R environment for kniting markdown doc properly
+library(knitr)
+opts_knit$set(root.dir='../', tidy=TRUE)
+```
+
+## Spatial Modeling Assignment
+
+```{r}
+library(nlme)
+library(vegan)
+source('./scripts/utility_functions.R')
+data(BCI)
+## UTM Coordinates (in metres)
+BCI_xy <- data.frame(x = rep(seq(625754, 626654, by=100), each=5), 
+                    y = rep(seq(1011569,  1011969, by=100), len=50))
+```
+
+1) Examine if there is evidence of spatial dependence in a rare and a common
+species in the BCI tree dataset
+
+The first thing we need to resolve is what would we consider as an example of a rare or a common species? 
+The rareest species have only a single individual but clearly there will be no spatial pattern in that. 
+Similarly the most common species in the dataset likely occurs in ever single quadrat so this species may also not yield any interesting spatial information. 
+Let's examine the distribution of abundances to see what would be reasonable to consider in this particular dataset. 
+
+```{r, tidy=TRUE}
+# compute the species-abundance distribution
+sad <- apply(BCI, 2, sum)
+# examine log transformed frequency distribution
+plot(density(log10(sad)))
+# visually define a two cutoffs for rare and common
+abline(v=1.5, col='red')
+abline(v=3, col='red')
+```
+
+The species abundance distribution (`sad`) indicates some relatively clear
+breaks to consider for a rare and a common species. Notice that I used a log
+transformation on abundance because a small number of species have very large 
+abundances but most things are rare. We can use the sad to help us define what
+a rare and common species are (see vertical red lines in above graphic).
+
+Now let's pull one rare species and one common species that are near our thresholds
+we defined. 
+
+```{r, tidy=T}
+sp_names <- names(BCI)[order(sad)]
+sad_ord <- sad[order(sad)]
+rare_sp <- sp_names[sad_ord > 10^1.5][1]
+comm_sp <- sp_names[sad_ord > 10^3][1]
+print('Example rare species is:')
+rare_sp
+print('Example common species is:')
+comm_sp
+```
+
+Now we simply need to plot the results. We'll start just by mapping the patterns 
+to try to judge visually if their is a spatial pattern then we'll examine the 
+bivariate patterns. 
+
+```{r, tidy=T, fig.width = 6, fig.height = 6*1.25}
+get_col_brks <- function(x) {
+    col_brks <- hist(x, plot=F)$breaks
+    col_indices <- as.numeric(cut(x, col_brks))
+    cols <- rev(terrain.colors(length(col_brks)))
+    cols[col_indices]
+}
+
+# one way to show the spatial patterns
+par(mfrow=c(2,1))
+plot(BCI_xy, type='n')
+points(BCI_xy, col=get_col_brks(BCI[ , rare_sp]), pch=19, cex=3)
+plot(BCI_xy, type='n')
+points(BCI_xy, col=get_col_brks(BCI[ , comm_sp]), pch=19, cex=3)
+
+# here is a better way that doesn't require guessing on the point size
+par(mfrow=c(2,1))
+image(matrix(BCI[ , rare_sp], nrow=10, ncol=5, byrow = TRUE),
+      col=rev(terrain.colors(12)))
+image(matrix(BCI[ , comm_sp], nrow=10, ncol=5, byrow = TRUE),
+      col=rev(terrain.colors(12)))
+```
+
+Based on these simple maps it does not look like there is a strong spatial
+signal in either the rare or common species. Let's look at bivariate
+relationships between variance in abundance and geographic distance. If the
+relationship is positive then this would be a signal of spatial autocorrelation.
+
+```{r, tidy=T}
+# Now let's examine the bivariate relationship between spatial and ecological
+# distance 
+rare_dist <- dist(BCI[ , rare_sp])
+comm_dist <- dist(BCI[ , comm_sp])
+geo_dist <- dist(BCI_xy)
+
+rare_lm <- lm(rare_dist ~ geo_dist)
+comm_lm <- lm(comm_dist ~ geo_dist)
+
+max_dist <- max(geo_dist) / 2
+
+plot(geo_dist, rare_dist)
+abline(rare_lm, col='blue')
+lines(lowess(as.vector(geo_dist), as.vector(rare_dist)), col='red', lwd=2)
+abline(v=max_dist, col='green3')
+
+plot(geo_dist, comm_dist)
+abline(comm_lm, col='blue')
+lines(lowess(geo_dist, comm_dist), col='red', lwd=2)
+abline(v=max_dist, col='green3')
+```
+
+Those lines are not very different from the null model
+so for these two specific species it looks like neither one has a strong spatial signal. We could test these correlations using a Mantel test but it really seems like that is not necessary based on how flat those lines appear.  
+
+**Optional analysis**
+To examine for general relationship between abundance and spatial patterning we can easily compute the correlation of every species with spatial distance
+
+```{r, tidy=T}
+spat_cor <- apply(BCI, 2, function(x)
+                 cor(geo_dist, dist(x)))
+
+par(mfrow=c(1,1))
+plot(log10(sad), spat_cor)
+lines(lowess(log10(sad), spat_cor), col='red', lwd=2)
+abline(h=0, col='grey')
+```
+
+It appears there is a weak positive correlation between abundance and the 
+correlation between spatial distance and species distance. This analysis also 
+reveals that this slope is typically positive (i.e., increasing spatial distance
+decreases the chance of encountering a conspecific) which is a signature of 
+spatial dependence / auto-correlation. 
+
+2) Build two generalized linear models to predict the abundance of the species
+*Drypetes standleyi* using the abundance of other tree species in the study site.
+Specifically examine the following species as predictor variables:
+
+```{r}
+sp_ids <- c("Cordia.lasiocalyx", "Hirtella.triandra",
+           "Picramnia.latifolia", "Quassia.amara",
+           "Tabernaemontana.arborea", "Trattinnickia.aspera", 
+           "Xylopia.macrantha")
+```
+
+Note renaming the species ids to something a little easier to work with like
+"sp_a", "sp_b" will make model construction a little less cumbersome
+
+* Model 1: only include a single species as a predictor variable
+
+* Model 2: include all of the species as predictor variables
+
+With both models examine the spatial dependence of the residuals using the 
+function `Variogram`. Model the spatial dependence in the residuals using one
+of the error structures available. 
+
+```{r}
+# put the species data together with the coordinate
+# data so that the model can easily have access to both
+# kinds of variables. 
+bci_dat <- data.frame(BCI, BCI_xy)
+
+# specify single and all species models
+# arbitrarily chose the first species in sp_ids as the single variable
+# predictor 
+sing_mod_formula <- as.formula(paste("Drypetes.standleyi ~ ",
+                                    paste(sp_ids[1], collapse= "+")))
+full_mod_formula <- as.formula(paste("Drypetes.standleyi ~ ",
+                                    paste(sp_ids, collapse= "+")))
+
+sing_ns_mod <- gls(sing_mod_formula, data=bci_dat)
+
+plot(Variogram(sing_ns_mod, form = ~ x + y))
+
+sing_sp_mods <- get_spat_mods(sing_ns_mod)
+get_spat_AIC(sing_sp_mods)
+# Quite a few models cannot be eliminated b/c AIC's are within two.
+# Now one should examine the 'best' models visually. 
+# The spherical model hits the bulk of the points the best it appears
+
+plot(Variogram(sing_sp_mods$Gaus$nug, form = ~ x + y, maxDist = max_dist))
+plot(Variogram(sing_sp_mods$Gaus$nug, form = ~ x + y, resType = 'n',
+               maxDist = max_dist))
+
+anova(sing_ns_mod, sing_sp_mods$Spher$nug)
+round(summary(sing_ns_mod)$tTable, 2)
+round(summary(sing_sp_mods$Spher$nug)$tTable, 2)
+# we can also look at pseudo R2 values
+pseudo_r2(sing_ns_mod)
+pseudo_r2(sing_sp_mods$Spher$nug, update(sing_ns_mod, . ~ + 1))
+```
+
+```{r}
+full_ns_mod <- gls(full_mod_formula, data=bci_dat)
+
+plot(Variogram(full_ns_mod, form = ~ x + y))
+
+#spatial dependence appears non-existant
+
+full_sp_mods <- get_spat_mods(full_ns_mod)
+get_spat_AIC(full_sp_mods)
+
+plot(Variogram(full_sp_mods$Spher$nug, form = ~ x + y, maxDist = max_dist))
+plot(Variogram(full_sp_mods$Spher$nug, form = ~ x + y, resType = 'n',
+               maxDist = max_dist))
+
+anova(full_ns_mod, full_sp_mods$Spher$nug)
+round(summary(full_ns_mod)$tTable, 2)
+round(summary(full_sp_mods$Spher$nug)$tTable, 2)
+
+# examine pseudo R^2 values
+pseudo_r2(full_ns_mod)
+pseudo_r2(full_sp_mods$Spher$nug, update(full_ns_mod, . ~ + 1))
+```
+
+* Did including the spatial error term have a large impact on the coefficients
+of the model?
+
+In the case of the single species model including the spatial term had a large 
+influence on the estimated beta coefficients and effect sizes. The effect went 
+from highly significant to not significant. The spatial model did not have very
+much influence on the coefficients of the model that included all the species as
+predictors.
+
+* Did including the spatial error terms significantly improve model fit (use 
+function `anova` to carry out model comparison)?
+
+The answer to this is technically yes for both models, but the spatial model is
+relatively much more favored in the single predictor modeling context. 
+
+* Explain why you did or did not observe a difference in the influence of adding the spatial error term between the two models.
+
+We have already verified that many of the species in the dataset are spatially 
+structured. If we include additional spatially structured predictor variables
+to model a spatially structured response then it should come as no surprise
+that when we include more predictors in our model that we will observe a
+decrease in not just the error variance but the spatially structured component
+of the error variance. This should not necessarily be interpreted as evidence of
+that the more complex model is doing a better job capturing the processes
+underlying the spatial dependence in the response. 
